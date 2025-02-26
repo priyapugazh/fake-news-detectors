@@ -1,0 +1,54 @@
+import pandas as pd, torch
+from transformers import BertTokenizer, BertForSequenceClassification, AdamW, Trainer, TrainingArguments
+from sklearn.model_selection import train_test_split
+
+# Load datasets
+true_df = pd.read_csv("True.csv")[['text']].assign(label=0)
+fake_df = pd.read_csv("Fake.csv")[['text']].assign(label=1)
+df = pd.concat([true_df.sample(1500), fake_df.sample(1500)]).sample(frac=1)  # Balance classes
+
+# Split data
+train_texts, val_texts, train_labels, val_labels = train_test_split(df['text'], df['label'], test_size=0.2)
+
+# BERT initialization
+tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+model = BertForSequenceClassification.from_pretrained('bert-base-uncased', num_labels=2)
+
+# Dataset class
+class NewsDataset(torch.utils.data.Dataset):
+    def __init__(self, texts, labels):
+        self.encodings = tokenizer(texts.tolist(), truncation=True, padding=True, max_length=256)
+        self.labels = labels.tolist()
+    def __getitem__(self, idx):
+        item = {k: torch.tensor(v[idx]) for k, v in self.encodings.items()}
+        item['labels'] = torch.tensor(self.labels[idx])
+        return item
+    def __len__(self):
+        return len(self.labels)
+
+# Training setup
+trainer = Trainer(
+    model=model,
+    args=TrainingArguments(
+        output_dir='./results',
+        num_train_epochs=3,
+        per_device_train_batch_size=8,
+        evaluation_strategy="epoch"
+    ),
+    train_dataset=NewsDataset(pd.Series(train_texts), train_labels),
+    eval_dataset=NewsDataset(pd.Series(val_texts), val_labels)
+)
+
+# Train and save
+trainer.train()
+model.save_pretrained("fake_news_bert_model")
+tokenizer.save_pretrained("fake_news_bert_model")
+
+# Prediction function
+def predict(text):
+    inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=256)
+    return "Fake" if torch.argmax(model(**inputs).logits).item() == 1 else "Real"
+
+# Test
+print(predict("Scientists confirm COVID-19 vaccine is 95% effective in final trials"))  # Real example
+print(predict("Bill Gates implants microchips in COVID vaccines"))  # Fake example
